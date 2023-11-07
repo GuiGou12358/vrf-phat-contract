@@ -6,7 +6,7 @@ pub mod vrf_consumer {
     use ink::codegen::{EmitEvent, Env};
     use ink::env::hash::{Blake2x256, HashOutput};
     use ink::prelude::vec::Vec;
-    use ink::storage::{Lazy, Mapping};
+    use ink::storage::Mapping;
     use openbrush::contracts::access_control::*;
     use openbrush::contracts::ownable::*;
     use openbrush::traits::Storage;
@@ -16,7 +16,6 @@ pub mod vrf_consumer {
         meta_transaction, meta_transaction::*, rollup_anchor, rollup_anchor::*,
     };
 
-    type CodeHash = [u8; 32];
     pub const MANAGER_ROLE: RoleType = ink::selector_id!("MANAGER_ROLE");
 
     /// Events emitted when a random value is requested
@@ -25,11 +24,11 @@ pub mod vrf_consumer {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u128,
+        requestor_nonce: Nonce,
         /// minimum value requested
-        min: u128,
+        min: u64,
         /// maximum value requested
-        max: u128,
+        max: u64,
         /// when the value has been requested
         timestamp: u64,
     }
@@ -40,9 +39,9 @@ pub mod vrf_consumer {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u128,
+        requestor_nonce: Nonce,
         /// random_value
-        random_value: u128,
+        random_value: u64,
         /// when the value has been received
         timestamp: u64,
     }
@@ -53,7 +52,7 @@ pub mod vrf_consumer {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u128,
+        requestor_nonce: Nonce,
         /// error number
         err_no: Vec<u8>,
         /// when the error has been received
@@ -101,11 +100,11 @@ pub mod vrf_consumer {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u128,
+        requestor_nonce: Nonce,
         /// minimum value requested
-        min: u128,
+        min: u64,
         /// maximum value requested
-        max: u128,
+        max: u64,
     }
     /// Message sent to provide a random value
     /// response pushed in the queue by the offchain rollup and read by the Ink! smart contract
@@ -115,14 +114,11 @@ pub mod vrf_consumer {
         resp_type: u8,
         /// initial request
         request: RandomValueRequestMessage,
-        /// hash of js script executed to calculate the random value
-        js_script_hash: Option<CodeHash>,
         /// random_value
-        random_value: Option<u128>,
+        random_value: Option<u64>,
         /// when an error occurs
         error: Option<Vec<u8>>,
     }
-
 
     #[ink(storage)]
     #[derive(Default, Storage)]
@@ -142,9 +138,7 @@ pub mod vrf_consumer {
         /// last random values by requestor
         /// The key contains the requestor address
         /// the value contains the tuple (timestamp, random_value)
-        last_values: Mapping<AccountId, (u64, u128)>,
-        /// hash of js script executed to calculate the random value
-        js_script_hash: Lazy<CodeHash>,
+        last_values: Mapping<AccountId, (u64, u64)>,
     }
 
     impl VrfClient {
@@ -173,7 +167,7 @@ pub mod vrf_consumer {
         }
 
         #[ink(message)]
-        pub fn get_last_value(&mut self) -> Result<Option<(u64, u128)>, ContractError> {
+        pub fn get_last_value(&mut self) -> Result<Option<(u64, u64)>, ContractError> {
             let requestor = self.env().caller();
             let value = self.last_values.get(requestor);
             Ok(value)
@@ -182,10 +176,9 @@ pub mod vrf_consumer {
         #[ink(message)]
         pub fn request_random_value(
             &mut self,
-            min: u128,
-            max: u128,
+            min: u64,
+            max: u64,
         ) -> Result<QueueIndex, ContractError> {
-
             if min > max {
                 return Err(ContractError::IncorrectMinMaxValues);
             }
@@ -214,10 +207,9 @@ pub mod vrf_consumer {
                 .insert((requestor_id, &requestor_nonce), &hash);
 
             // update the nonce
-            self.requestor_nonces
-                .insert(requestor_id, &requestor_nonce);
+            self.requestor_nonces.insert(requestor_id, &requestor_nonce);
 
-            // emmit te event
+            // emmit the event
             self.env().emit_event(RandomValueRequested {
                 requestor_id,
                 requestor_nonce,
@@ -244,19 +236,6 @@ pub mod vrf_consumer {
         pub fn get_manager_role(&self) -> RoleType {
             MANAGER_ROLE
         }
-
-        #[ink(message)]
-        #[openbrush::modifiers(access_control::only_role(MANAGER_ROLE))]
-        pub fn set_js_script_hash(&mut self, js_script_hash: CodeHash) -> Result<(), ContractError> {
-            self.js_script_hash.set(&js_script_hash);
-            Ok(())
-        }
-
-        #[ink(message)]
-        pub fn get_js_script_hash(&self) -> Option<CodeHash> {
-            self.js_script_hash.get()
-        }
-
     }
 
     impl RollupAnchor for VrfClient {}
@@ -287,20 +266,6 @@ pub mod vrf_consumer {
             // remove the ongoing hash
             self.hash_requests.remove((requestor_id, &requestor_nonce));
 
-            // check the js code hash
-            let expected_js_hash = self
-                .js_script_hash
-                .get()
-                .ok_or(RollupAnchorError::ConditionNotMet)?; // improve the error
-
-            let used_js_hash = message
-                .js_script_hash
-                .ok_or(RollupAnchorError::ConditionNotMet)?; // improve the error
-            // check the js code hash
-            if used_js_hash != expected_js_hash {
-                return Err(RollupAnchorError::ConditionNotMet); // improve the error
-            }
-
             let timestamp = self.env().block_timestamp();
 
             // handle the response
@@ -312,7 +277,8 @@ pub mod vrf_consumer {
                     .ok_or(RollupAnchorError::FailedToDecode)?;
 
                 // register the info
-                self.last_values.insert(requestor_id, &(timestamp, random_value));
+                self.last_values
+                    .insert(requestor_id, &(timestamp, random_value));
 
                 // emmit te event
                 self.env().emit_event(RandomValueReceived {
@@ -398,19 +364,6 @@ pub mod vrf_consumer {
                 .account_id
         }
 
-        async fn alice_set_js_script_hash(
-            client: &mut ink_e2e::Client<PolkadotConfig, DefaultEnvironment>,
-            contract_id: &AccountId,
-        ) {
-            let code_hash = [1u8; 32];
-            let set_js_script_hash = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.set_js_script_hash(code_hash));
-            client
-                .call(&ink_e2e::alice(), set_js_script_hash, 0, None)
-                .await
-                .expect("set js code hash failed");
-        }
-
         async fn alice_grants_bob_as_attestor(
             client: &mut ink_e2e::Client<PolkadotConfig, DefaultEnvironment>,
             contract_id: &AccountId,
@@ -425,7 +378,6 @@ pub mod vrf_consumer {
                 .expect("grant bob as attestor failed");
         }
 
-
         #[ink_e2e::test]
         async fn test_incorrect_min_max_values(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
             // given
@@ -433,7 +385,7 @@ pub mod vrf_consumer {
 
             // a price request is sent but min > max
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(1000_u128, 100_u128));
+                .call(|oracle| oracle.request_random_value(1000_u64, 100_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await;
@@ -441,7 +393,6 @@ pub mod vrf_consumer {
             assert!(result.is_err());
 
             Ok(())
-
         }
 
         #[ink_e2e::test]
@@ -449,15 +400,12 @@ pub mod vrf_consumer {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
 
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
 
             // a price request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(100_u128, 1000_u128));
+                .call(|oracle| oracle.request_random_value(100_u64, 1000_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -468,7 +416,7 @@ pub mod vrf_consumer {
             let request_id = result.return_value().expect("Request id not found");
 
             // then a response is received
-            let random_value = Some(131_u128);
+            let random_value = Some(131_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -476,10 +424,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 1,
-                    min: 100_u128,
-                    max: 1000_u128,
+                    min: 100_u64,
+                    max: 1000_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -542,15 +489,12 @@ pub mod vrf_consumer {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
 
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
 
             // a request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(0_u128, 1000000000_u128));
+                .call(|oracle| oracle.request_random_value(0_u64, 1000000000_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -561,7 +505,7 @@ pub mod vrf_consumer {
             let request_id = result.return_value().expect("Request id not found");
 
             // then a response is received
-            let random_value = Some(131_u128);
+            let random_value = Some(131_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -569,10 +513,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 1,
-                    min: 0_u128,
-                    max: 1000000000_u128,
+                    min: 0_u64,
+                    max: 1000000000_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -601,7 +544,7 @@ pub mod vrf_consumer {
 
             // another request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(50_u128, 100_u128));
+                .call(|oracle| oracle.request_random_value(50_u64, 100_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -612,7 +555,7 @@ pub mod vrf_consumer {
             let request_id = result.return_value().expect("Request id not found");
 
             // another response is received
-            let random_value = Some(75_u128);
+            let random_value = Some(75_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -620,10 +563,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 2,
-                    min: 50_u128,
-                    max: 100_u128,
+                    min: 50_u64,
+                    max: 100_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -660,15 +602,12 @@ pub mod vrf_consumer {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
 
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
 
             // a first request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(0_u128, 1000000000_u128));
+                .call(|oracle| oracle.request_random_value(0_u64, 1000000000_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -680,7 +619,7 @@ pub mod vrf_consumer {
 
             // another request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(0_u128, 50_u128));
+                .call(|oracle| oracle.request_random_value(0_u64, 50_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -691,7 +630,7 @@ pub mod vrf_consumer {
             let request_id_2 = result.return_value().expect("Request id not found");
 
             // then a response is received
-            let random_value = Some(131_u128);
+            let random_value = Some(131_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -699,10 +638,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 1,
-                    min: 0_u128,
-                    max: 1000000000_u128,
+                    min: 0_u64,
+                    max: 1000000000_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -730,7 +668,7 @@ pub mod vrf_consumer {
             assert_eq!(last_value.unwrap().1, 131);
 
             // another response is received
-            let random_value = Some(25_u128);
+            let random_value = Some(25_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -738,10 +676,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 2,
-                    min: 0_u128,
-                    max: 50_u128,
+                    min: 0_u64,
+                    max: 50_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -776,15 +713,12 @@ pub mod vrf_consumer {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
 
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
 
             // a request is sent
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(0_u128, 1000000000_u128));
+                .call(|oracle| oracle.request_random_value(0_u64, 1000000000_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -795,7 +729,7 @@ pub mod vrf_consumer {
             let request_id = result.return_value().expect("Request id not found");
 
             // then a response is received
-            let random_value = Some(51_u128);
+            let random_value = Some(51_u64);
             let payload = RandomValueResponseMessage {
                 resp_type: TYPE_RESPONSE,
                 request: RandomValueRequestMessage {
@@ -803,10 +737,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 1,
-                    min: 51_u128, // bad rpc that update the min and max values
-                    max: 51_u128,
+                    min: 51_u64, // bad rpc that update the min and max values
+                    max: 51_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 random_value,
                 error: None,
             };
@@ -830,15 +763,12 @@ pub mod vrf_consumer {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
 
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
 
             // a random value is requested
             let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(100_u128, 1000_u128));
+                .call(|oracle| oracle.request_random_value(100_u64, 1000_u64));
             let result = client
                 .call(&ink_e2e::charlie(), request_random_value, 0, None)
                 .await
@@ -856,10 +786,9 @@ pub mod vrf_consumer {
                         ink_e2e::charlie().public_key().0,
                     ),
                     requestor_nonce: 1,
-                    min: 100_u128,
-                    max: 1000_u128,
+                    min: 100_u64,
+                    max: 1000_u64,
                 },
-                js_script_hash: Some([1u8; 32]),
                 error: Some(12356.encode()),
                 random_value: None,
             };
@@ -883,9 +812,6 @@ pub mod vrf_consumer {
         async fn test_bad_attestor(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
             // given
             let contract_id = alice_instantiates_contract(&mut client).await;
-
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
 
             // bob is not granted as attestor => it should not be able to send a message
             let rollup_cond_eq = build_message::<VrfClientRef>(contract_id.clone())
@@ -912,70 +838,11 @@ pub mod vrf_consumer {
             Ok(())
         }
 
-
-        #[ink_e2e::test]
-        async fn test_bad_js_code_hash(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
-            // given
-            let contract_id = alice_instantiates_contract(&mut client).await;
-
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
-
-            // bob is granted as attestor
-            alice_grants_bob_as_attestor(&mut client, &contract_id).await;
-
-            // a request is sent
-            let request_random_value = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.request_random_value(0_u128, 1000000000_u128));
-            let result = client
-                .call(&ink_e2e::charlie(), request_random_value, 0, None)
-                .await
-                .expect("Request random value should be sent");
-            // event MessageQueued
-            assert!(result.contains_event("Contracts", "ContractEmitted"));
-
-            let request_id = result.return_value().expect("Request id not found");
-
-            // then a response is received
-            let random_value = Some(51_u128);
-            let payload = RandomValueResponseMessage {
-                resp_type: TYPE_RESPONSE,
-                request: RandomValueRequestMessage {
-                    requestor_id: ink::primitives::AccountId::from(
-                        ink_e2e::charlie().public_key().0,
-                    ),
-                    requestor_nonce: 1,
-                    min: 0_u128, // bad rpc that update the min and max values
-                    max: 1000000000_u128,
-                },
-                js_script_hash: Some([2u8; 32]), // bad js code hash
-                random_value,
-                error: None,
-            };
-            let actions = vec![
-                HandleActionInput::Reply(payload.encode()),
-                HandleActionInput::SetQueueHead(request_id + 1),
-            ];
-            let rollup_cond_eq = build_message::<VrfClientRef>(contract_id.clone())
-                .call(|oracle| oracle.rollup_cond_eq(vec![], vec![], actions.clone()));
-            let result = client.call(&ink_e2e::bob(), rollup_cond_eq, 0, None).await;
-            assert!(
-                result.is_err(),
-                "We should not accept response with bad js code hash"
-            );
-
-            Ok(())
-        }
-
-
         #[ink_e2e::test]
         async fn test_bad_messages(mut client: ink_e2e::Client<C, E>) -> E2EResult<()> {
             // given
 
             let contract_id = alice_instantiates_contract(&mut client).await;
-
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
 
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;
@@ -997,9 +864,6 @@ pub mod vrf_consumer {
             // given
 
             let contract_id = alice_instantiates_contract(&mut client).await;
-
-            // set the js code hash
-            alice_set_js_script_hash(&mut client, &contract_id).await;
 
             // bob is granted as attestor
             alice_grants_bob_as_attestor(&mut client, &contract_id).await;

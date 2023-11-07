@@ -5,14 +5,13 @@ extern crate core;
 
 #[ink::contract(env = pink_extension::PinkEnvironment)]
 mod vrf_oracle {
-    use alloc::{string::String, string::ToString, vec, vec::Vec};
-    use ink::storage::Lazy;
+    use alloc::{string::String, vec::Vec};
     use phat_offchain_rollup::clients::ink::{Action, ContractId, InkRollupClient};
     use pink_extension::chain_extension::signing;
+    use pink_extension::vrf;
     use pink_extension::{error, info, ResultExt};
     use scale::{Decode, Encode};
 
-    type CodeHash = [u8; 32];
     /// Type of response when the offchain rollup communicates with this contract
     const TYPE_ERROR: u8 = 0;
     const TYPE_RESPONSE: u8 = 10;
@@ -24,11 +23,11 @@ mod vrf_oracle {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u128,
+        requestor_nonce: u64,
         /// minimum value requested
-        min: u128,
+        min: u64,
         /// maximum value requested
-        max: u128,
+        max: u64,
     }
     /// Message sent to provide a random value
     /// response pushed in the queue by the offchain rollup and read by the Ink! smart contract
@@ -38,10 +37,8 @@ mod vrf_oracle {
         resp_type: u8,
         /// initial request
         request: RandomValueRequestMessage,
-        /// hash of js script executed to calculate the random value
-        js_script_hash: Option<CodeHash>,
         /// random_value
-        random_value: Option<u128>,
+        random_value: Option<u64>,
         /// when an error occurs
         error: Option<Vec<u8>>,
     }
@@ -53,20 +50,6 @@ mod vrf_oracle {
         config: Option<Config>,
         /// Key for signing the rollup tx.
         attest_key: [u8; 32],
-        /// The JS code that processes the rollup queue request
-        core_js: Lazy<CoreJs>,
-    }
-
-    #[derive(Encode, Decode, Debug, Clone)]
-    #[cfg_attr(
-        feature = "std",
-        derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
-    )]
-    pub struct CoreJs {
-        /// The JS code that processes the rollup queue request
-        script: String,
-        /// The code hash of the core js script
-        code_hash: CodeHash,
     }
 
     #[derive(Encode, Decode, Debug)]
@@ -91,7 +74,6 @@ mod vrf_oracle {
     pub enum ContractError {
         BadOrigin,
         ClientNotConfigured,
-        CoreNotConfigured,
         InvalidKeyLength,
         InvalidAddressLength,
         NoRequestInQueue,
@@ -108,8 +90,10 @@ mod vrf_oracle {
         FailedToCallRollup,
 
         MinGreaterThanMax,
-        JsError(String),
-        ParseIntError(String),
+        DivByZero,
+        MulOverFlow,
+        AddOverFlow,
+        SubOverFlow,
     }
 
     type Result<T> = core::result::Result<T, ContractError>;
@@ -127,16 +111,11 @@ mod vrf_oracle {
             const NONCE: &[u8] = b"attest_key";
             let private_key = signing::derive_sr25519_key(NONCE);
 
-            let mut instance = Self {
+            let instance = Self {
                 owner: Self::env().caller(),
                 attest_key: private_key[..32].try_into().expect("Invalid Key Length"),
                 config: None,
-                core_js: Default::default(),
             };
-            let js_code =
-                r#"(() => {let value = Math.floor(Math.random() * (Number(scriptArgs[1]) - Number(scriptArgs[0]) + 1)) + Number(scriptArgs[0]); return value})();"#
-                    .to_string();
-            instance.config_core_js_inner(js_code);
             instance
         }
 
@@ -226,30 +205,6 @@ mod vrf_oracle {
             Ok(())
         }
 
-        /// Get the core script
-        #[ink(message)]
-        pub fn get_core_js(&self) -> Option<CoreJs> {
-            self.core_js.get()
-        }
-
-        /// Configures the core js script (admin only)
-        #[ink(message)]
-        pub fn config_core_js(&mut self, core_js: String) -> Result<()> {
-            self.ensure_owner()?;
-            self.config_core_js_inner(core_js);
-            Ok(())
-        }
-
-        fn config_core_js_inner(&mut self, core_js: String) {
-            let code_hash = self
-                .env()
-                .hash_bytes::<ink::env::hash::Sha2x256>(core_js.as_bytes());
-            self.core_js.set(&CoreJs {
-                script: core_js,
-                code_hash,
-            });
-        }
-
         /// Transfers the ownership of the contract (admin only)
         #[ink(message)]
         pub fn transfer_ownership(&mut self, new_owner: AccountId) -> Result<()> {
@@ -286,11 +241,6 @@ mod vrf_oracle {
             let min = request.min;
             let max = request.max;
 
-            let Some(CoreJs { script, code_hash }) = self.core_js.get() else {
-                error!("CoreNotConfigured");
-                return Err(ContractError::CoreNotConfigured);
-            };
-
             info!(
                 "Request received from {requestor_id:?}/{requestor_nonce} - random value between {min} and {max}"
             );
@@ -300,24 +250,21 @@ mod vrf_oracle {
                     resp_type: TYPE_ERROR,
                     request,
                     random_value: None,
-                    js_script_hash: Some(code_hash),
                     error: Some(ContractError::MinGreaterThanMax.encode()),
                 };
                 return Ok(response);
             }
 
-            let response = match self.get_random(min, max, script) {
+            let response = match self.get_random(min, max, requestor_id, requestor_nonce) {
                 Ok(random_value) => RandomValueResponseMessage {
                     resp_type: TYPE_RESPONSE,
                     request,
-                    js_script_hash: Some(code_hash),
                     random_value: Some(random_value),
                     error: None,
                 },
                 Err(e) => RandomValueResponseMessage {
                     resp_type: TYPE_ERROR,
                     request,
-                    js_script_hash: Some(code_hash),
                     random_value: None,
                     error: Some(e.encode()),
                 },
@@ -327,30 +274,36 @@ mod vrf_oracle {
 
         /// Simulate and return a random number (for dev purpose)
         #[ink(message)]
-        pub fn get_random(&self, min: u128, max: u128, js_code: String) -> Result<u128> {
-            let args = vec![min.to_string(), max.to_string()];
-            let result = self.get_js_result(js_code.to_string(), args)?;
-            info!("random value between {min} and {max} :  {result:?}");
-            let value = result
-                .as_str()
-                .parse::<u128>()
-                .map_err(|e| ContractError::ParseIntError(e.to_string()))?;
-            Ok(value)
-        }
+        pub fn get_random(
+            &self,
+            min: u64,
+            max: u64,
+            requestor_id: AccountId,
+            requestor_nonce: u64,
+        ) -> Result<u64> {
+            let mut salt: Vec<u8> = Vec::new();
+            salt.extend_from_slice(&requestor_id.as_ref());
+            salt.extend_from_slice(&requestor_nonce.to_be_bytes());
 
-        fn get_js_result(&self, js_code: String, args: Vec<String>) -> Result<String> {
-            let output = phat_js::eval(&js_code, &args)
-                .log_err("Failed to eval the core js")
-                .map_err(ContractError::JsError)?;
+            let output = vrf(&salt);
 
-            let output_as_bytes = match output {
-                phat_js::Output::String(s) => s.into_bytes(),
-                phat_js::Output::Bytes(b) => b,
-                phat_js::Output::Undefined => {
-                    return Err(ContractError::JsError("Undefined output".to_string()))
-                }
-            };
-            Ok(String::from_utf8(output_as_bytes).unwrap())
+            // a is between 0 and 255
+            let a = output[0] as u128;
+
+            // a * (max - min + 1) / (u8::MAX) + min
+            let result = (max as u128)
+                .checked_sub(min as u128)
+                .ok_or(ContractError::SubOverFlow)?
+                .checked_add(1)
+                .ok_or(ContractError::AddOverFlow)?
+                .checked_mul(a)
+                .ok_or(ContractError::MulOverFlow)?
+                .checked_div(u8::MAX as u128)
+                .ok_or(ContractError::DivByZero)?
+                .checked_add(min as u128)
+                .ok_or(ContractError::AddOverFlow)? as u64;
+
+            Ok(result)
         }
 
         /// Returns BadOrigin error if the caller is not the owner
@@ -419,6 +372,7 @@ mod vrf_oracle {
     mod tests {
         use super::*;
         use ink::env::debug_println;
+        use ink::primitives::AccountId;
 
         struct EnvVars {
             /// The RPC endpoint of the target blockchain
@@ -507,49 +461,36 @@ mod vrf_oracle {
         }
 
         #[ink::test]
-        #[ignore = "The JS Contract is not accessible inner the test"]
-        fn get_js_result() {
+        fn test_random() {
             let _ = env_logger::try_init();
             pink_extension_runtime::mock_ext::mock_all_ext();
 
-            debug_println!("1");
-
             let vrf = init_contract();
 
-            let a = 5;
-            let b = 9;
-            let js_code = format!(
-                r#"
-                    (() => {{
-                        let total = {a} + {b};
-                        return total
-                    }})();
-                "#
-            );
-            let args = vec![];
-            let result = vrf.get_js_result(js_code, args).unwrap();
+            let account = AccountId::try_from(*&[1u8; 32]).unwrap();
+
+            let min = 1;
+            let max = 10;
+            let result = vrf.get_random(min, max, account, 1).unwrap();
+            assert!(result >= min);
+            assert!(result <= max);
             debug_println!("random number: {result:?}");
+
+            let min = 0;
+            let max = u64::MAX;
+            let result = vrf.get_random(min, max, account, 2).unwrap();
+            assert!(result >= min);
+            assert!(result <= max);
+            debug_println!("random number: {result:?}");
+
+            assert_eq!(101, vrf.get_random(101, 101, account, 2).unwrap());
+            assert_eq!(0, vrf.get_random(0, 0, account, 3).unwrap());
+            assert_eq!(u64::MAX, vrf.get_random(u64::MAX, u64::MAX, account, 3).unwrap());
         }
 
         #[ink::test]
-        #[ignore = "The JS Contract is not accessible inner the test"]
-        fn get_random_number() {
-            let _ = env_logger::try_init();
-            pink_extension_runtime::mock_ext::mock_all_ext();
-
-            let vrf = init_contract();
-            let js_code =
-                r#"(() => {let value = Math.floor(Math.random() * (Number(scriptArgs[1]) - Number(scriptArgs[0]) + 1)) + Number(scriptArgs[0]); return value})();"#
-                    .to_string();
-
-            let r = vrf.get_random(10, 100, js_code);
-
-            debug_println!("random number: {r:?}");
-        }
-
-        #[ink::test]
-        #[ignore = "The JS Contract is not accessible inner the test"]
-        fn answer_price_request() {
+        #[ignore = "The target contract must be deployed and request must be submitted"]
+        fn answer_request() {
             let _ = env_logger::try_init();
             pink_extension_runtime::mock_ext::mock_all_ext();
 
