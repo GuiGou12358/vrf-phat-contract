@@ -23,7 +23,7 @@ mod vrf_oracle {
         /// id of the requestor
         requestor_id: AccountId,
         /// nonce of the requestor
-        requestor_nonce: u64,
+        requestor_nonce: u128,
         /// minimum value requested
         min: u64,
         /// maximum value requested
@@ -111,12 +111,11 @@ mod vrf_oracle {
             const NONCE: &[u8] = b"attest_key";
             let private_key = signing::derive_sr25519_key(NONCE);
 
-            let instance = Self {
+            Self {
                 owner: Self::env().caller(),
                 attest_key: private_key[..32].try_into().expect("Invalid Key Length"),
                 config: None,
-            };
-            instance
+            }
         }
 
         /// Gets the owner of the contract
@@ -279,10 +278,10 @@ mod vrf_oracle {
             min: u64,
             max: u64,
             requestor_id: AccountId,
-            requestor_nonce: u64,
+            requestor_nonce: u128,
         ) -> Result<u64> {
             let mut salt: Vec<u8> = Vec::new();
-            salt.extend_from_slice(&requestor_id.as_ref());
+            salt.extend_from_slice(requestor_id.as_ref());
             salt.extend_from_slice(&requestor_nonce.to_be_bytes());
 
             let output = vrf(&salt);
@@ -485,11 +484,14 @@ mod vrf_oracle {
 
             assert_eq!(101, vrf.get_random(101, 101, account, 2).unwrap());
             assert_eq!(0, vrf.get_random(0, 0, account, 3).unwrap());
-            assert_eq!(u64::MAX, vrf.get_random(u64::MAX, u64::MAX, account, 3).unwrap());
+            assert_eq!(
+                u64::MAX,
+                vrf.get_random(u64::MAX, u64::MAX, account, 3).unwrap()
+            );
         }
 
         #[ink::test]
-        #[ignore = "The target contract must be deployed and request must be submitted"]
+        #[ignore = "The target contract must be deployed on the Substrate node and a random number request must be submitted"]
         fn answer_request() {
             let _ = env_logger::try_init();
             pink_extension_runtime::mock_ext::mock_all_ext();
