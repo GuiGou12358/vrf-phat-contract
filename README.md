@@ -56,8 +56,8 @@ For example:
 RPC=https://shibuya.public.blastapi.io
 PALLET_ID=70
 CALL_ID=6
-#public key of the contract aesULxtrttD4VGe1oDWGnDihbknjQ44GYwN1L8RXMcWZxis
-CONTRACT_ID=0xd0a5af9b2cd1fa7ca7b8c37cb1323b6596c7810b661085dbc32bdcd3a498219c
+#public key of the contract WJFx4kaW59yMD4rpQQbWnUErKr35fo4aEEM7HuukkJkbq7a
+CONTRACT_ID=0x0ffc44222f454540273d41249c51fec33567258bf4b4f2d67804fda7ddd504dc
 ```
 ![config_target_contract](https://github.com/GuiGou12358/decentralized_oracle-vrf/assets/92046056/aee3b404-91b6-46a9-8882-1e38a94c65d3)
 
@@ -88,13 +88,6 @@ And grant the Phat Contract as attestor
 
 ![configure attestor](https://github.com/GuiGou12358/decentralized_oracle-vrf/assets/92046056/3f91f50b-0007-4a6d-9b37-badb04946620)
 
-### Register the code hash used to compute the random value
-
-You have to register the hash of the source code used to generate the random number by the Phat Contract `VrfOracle`.
-
-![get_core_js](https://github.com/GuiGou12358/decentralized_oracle-vrf/assets/92046056/6b9b3d8a-f5d3-4923-8f8f-d6b5ec7690fb)
-
-![set_core_js](https://github.com/decentralized-oracles/vrf/assets/92046056/22d7e3bc-8082-45a5-a0bc-941f31836316)
 
 ## Test
 

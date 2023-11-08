@@ -14,15 +14,23 @@ To build the contract:
 cargo contract build
 ```
 
+## Run Unit tests
+
+To run the unit test:
+
+```bash
+cargo test
+```
+
 ## Run Integration tests
 
 ### Deploy the ink! smart contract `vrf_consumer`
 
 Before you can run the tests, you need to have an ink! smart contract deployed in a Substrate node with pallet-contracts.
 
-#### Use the default ink! smart contract
+#### Use the default Ink! smart contract
 
-You can use the default smart contract deployed on Shibuya (`...`).
+You can use the default smart contract deployed on Shibuya (`WJFx4kaW59yMD4rpQQbWnUErKr35fo4aEEM7HuukkJkbq7a`).
 
 #### Or deploy your own ink! smart contract
 
@@ -32,14 +40,19 @@ cd ../../ink/contracts/vrf_consumer
 cargo contract build
 ```
 And use Contracts-UI or Polkadot.js to deploy your contract and interact with it.
-You will have to configure `alice` as attestor.
+You will have to configure `alice` or another address as attestor.
 
 ### Push some requests
 
 Use Contracts-UI or Polkadot.js to interact with your smart contract deployed on local node or Shibuya and request a random number.
 
+
 ### Run the integration tests
-And finally execute the following command to start integration tests execution.
+
+Copy `.env_local` or `.env_shibuya` as `.env` if you haven't done it before. 
+It tells the Phat Contract to connect to the Ink! contracts deployed on your local Substrate node or on Shibuya node.
+
+Finally, execute the following command to start integration tests execution.
 
 ```bash
 cargo test  -- --ignored --test-threads=1
