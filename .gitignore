@@ -1,3 +1,5 @@
 /ink/contracts/vrf_consumer/Cargo.lock
 /phat/contracts/vrf_oracle/.env
 /phat/contracts/vrf_oracle/Cargo.lock
+/phat/contracts/vrf_oracle/target/
+/ink/contracts/vrf_consumer/target/
