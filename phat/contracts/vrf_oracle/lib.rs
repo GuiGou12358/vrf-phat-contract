@@ -254,7 +254,7 @@ mod vrf_oracle {
                 return Ok(response);
             }
 
-            let response = match self.get_random(min, max, requestor_id, requestor_nonce) {
+            let response = match self.inner_get_random(min, max, requestor_id, requestor_nonce) {
                 Ok(random_value) => RandomValueResponseMessage {
                     resp_type: TYPE_RESPONSE,
                     request,
@@ -271,9 +271,20 @@ mod vrf_oracle {
             Ok(response)
         }
 
-        /// Simulate and return a random number (for dev purpose)
+        /// Simulate and return a random number (admin only - for dev purpose)
         #[ink(message)]
         pub fn get_random(
+            &self,
+            min: u64,
+            max: u64,
+            requestor_id: AccountId,
+            requestor_nonce: u128,
+        ) -> Result<u64> {
+            self.ensure_owner()?;
+            self.inner_get_random(min, max, requestor_id, requestor_nonce)
+        }
+
+        fn inner_get_random(
             &self,
             min: u64,
             max: u64,

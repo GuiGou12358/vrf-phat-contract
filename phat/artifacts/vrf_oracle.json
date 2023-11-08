@@ -1,6 +1,6 @@
 {
   "source": {
-    "hash": "0x19b5d0ed5a31ef1d9b0a0d6b6fb1a15fabab2192e666357ca337add9e1ba3598",
+    "hash": "0x5690fa7e4afdc2af17767c4888b03424efbe715ca2e22583692c2a02152c18c3",
     "language": "ink! 4.3.0",
     "compiler": "rustc 1.72.0",
     "build_info": {
@@ -358,7 +358,7 @@
         ],
         "default": false,
         "docs": [
-          " Simulate and return a random number (for dev purpose)"
+          " Simulate and return a random number (admin only - for dev purpose)"
         ],
         "label": "get_random",
         "mutates": false,
