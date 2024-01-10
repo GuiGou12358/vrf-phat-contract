@@ -296,24 +296,25 @@ mod vrf_oracle {
             salt.extend_from_slice(&requestor_nonce.to_be_bytes());
 
             let output = vrf(&salt);
+            // keep only 8 bytes to compute the random u64
+            let mut arr = [0x00; 8];
+            arr.copy_from_slice(&output[0..8]);
+            let rand_u64 = u64::from_le_bytes(arr);
 
-            // a is between 0 and 255
-            let a = output[0] as u128;
-
-            // a * (max - min + 1) / (u8::MAX) + min
-            let result = (max as u128)
+            // r = rand_u64() % (max - min + 1) + min
+            // use u128 because (max - min + 1) can be equal to (U64::MAX - 0 + 1)
+            let a = (max as u128)
                 .checked_sub(min as u128)
                 .ok_or(ContractError::SubOverFlow)?
-                .checked_add(1)
-                .ok_or(ContractError::AddOverFlow)?
-                .checked_mul(a)
-                .ok_or(ContractError::MulOverFlow)?
-                .checked_div(u8::MAX as u128)
-                .ok_or(ContractError::DivByZero)?
+                .checked_add(1u128)
+                .ok_or(ContractError::AddOverFlow)?;
+            let b = (rand_u64 as u128) % a;
+            let r = b
                 .checked_add(min as u128)
-                .ok_or(ContractError::AddOverFlow)? as u64;
+                .ok_or(ContractError::AddOverFlow)?;
 
-            Ok(result)
+            // the result is always in u64 range
+            Ok(r as u64)
         }
 
         /// Returns BadOrigin error if the caller is not the owner
@@ -499,6 +500,26 @@ mod vrf_oracle {
                 u64::MAX,
                 vrf.get_random(u64::MAX, u64::MAX, account, 3).unwrap()
             );
+        }
+
+        #[ink::test]
+        fn test_copy_u64_min_value() {
+            let input = [0x00; 32];
+            // keep only 8 bytes to compute the random u64
+            let mut u64_bytes = [0xff; 8];
+            u64_bytes.copy_from_slice(&input[0..8]);
+            let value_u64 = u64::from_le_bytes(u64_bytes);
+            assert_eq!(0, value_u64);
+        }
+
+        #[ink::test]
+        fn test_copy_u64_max_value() {
+            let input = [0xff; 32];
+            // keep only 8 bytes to compute the random u64
+            let mut u64_bytes = [0x00; 8];
+            u64_bytes.copy_from_slice(&input[0..8]);
+            let value_u64 = u64::from_le_bytes(u64_bytes);
+            assert_eq!(u64::MAX, value_u64);
         }
 
         #[ink::test]
